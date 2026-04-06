@@ -1,5 +1,42 @@
 # Problem 6 — Live Scoreboard Module Specification
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture Diagram](#architecture-diagram)
+- [Execution Flow (Sequence)](#execution-flow-sequence)
+  - [Score Update Flow](#score-update-flow)
+  - [Live Leaderboard Broadcast Flow](#live-leaderboard-broadcast-flow)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [API Reference](#api-reference)
+  - [POST /api/v1/scores/increment](#post-apiv1scoresincrement)
+  - [GET /api/v1/scores/leaderboard](#get-apiv1scoresleaderboard)
+  - [WebSocket /ws/v1/leaderboard](#websocket-wsv1leaderboard)
+- [Authorization & Security](#authorization--security)
+  - [1. JWT Authentication](#1-jwt-authentication)
+  - [2. Action Tokens](#2-action-tokens)
+  - [3. Idempotency (Two Layers)](#3-idempotency-two-layers)
+  - [4. Rate Limiting](#4-rate-limiting)
+  - [5. Server-Side Delta](#5-server-side-delta)
+- [Data Model](#data-model)
+  - [User (existing table)](#user-existing-table)
+  - [ScoreEvent (new table)](#scoreevent-new-table)
+  - [Redis Leaderboard (Sorted Set)](#redis-leaderboard-sorted-set)
+- [Horizontal Scaling](#horizontal-scaling)
+- [Observability](#observability)
+- [Suggested Improvements](#suggested-improvements)
+  - [1. Action Token Endpoint Ownership](#1-action-token-endpoint-ownership)
+  - [2. Score Delta Configuration](#2-score-delta-configuration)
+  - [3. Score Velocity Anomaly Alerts](#3-score-velocity-anomaly-alerts)
+  - [4. WebSocket Authentication](#4-websocket-authentication)
+  - [5. Graceful Redis Degradation](#5-graceful-redis-degradation)
+  - [6. Leaderboard Consistency Reconciliation](#6-leaderboard-consistency-reconciliation)
+  - [7. Action Token Timing Attack](#7-action-token-timing-attack)
+  - [8. Horizontal Scaling](#8-horizontal-scaling)
+
+---
+
 ## Overview
 
 This document specifies the **Score Update Module** for the backend API service. It covers the REST and WebSocket interfaces, authorization model, data flow, and project structure for the engineering team to implement.
@@ -9,6 +46,174 @@ This document specifies the **Score Update Module** for the backend API service.
 - Prevent unauthorized or replayed score submissions
 - Maintain a real-time top-10 leaderboard
 - Broadcast live leaderboard updates to all connected clients
+
+---
+
+## Architecture Diagram
+
+The diagram below shows the full request lifecycle and component relationships across six layers:
+
+| Layer | Components | Role |
+|---|---|---|
+| **Clients** | REST, WebSocket | Entry points — HTTP requests and persistent WS connections |
+| **Middleware** | authenticate, rateLimit, errorHandler | Gatekeeping — JWT verification, rate limiting, error handling applied before any business logic |
+| **Controller** | ScoreController | Parses and validates the incoming request payload using Zod before delegating |
+| **Services** | ScoreService, ActionService, LeaderboardService | Core business logic — token verification, idempotency, score calculation, leaderboard diffing |
+| **Data Layer** | ScoreRepository, WebSocket Hub | Persistence (Prisma → MySQL) and real-time fan-out to connected WS clients |
+| **Storage** | MySQL, Redis | MySQL stores durable records; Redis holds the sorted-set leaderboard, idempotency keys, snapshot cache, and Pub/Sub channel |
+
+The two main flows through the system are:
+- **Score update path** (left spine): `REST → Middleware → Controller → ScoreService → ActionService / ScoreRepository → MySQL`
+- **Broadcast path** (right spine): `LeaderboardService → Redis Pub/Sub → WebSocket Hub → WebSocket clients`
+
+```mermaid
+flowchart TD
+    %% ── Row 0: Clients ───────────────────────────────────────────
+    REST(["REST (HTTPS)"])
+    WSC(["WebSocket (WSS)"])
+
+    %% ── Row 1: Middleware ────────────────────────────────────────
+    subgraph MW["Middleware"]
+        direction LR
+        Auth["authenticate<br/>(JWT RS256)"]
+        Rate["rateLimit<br/>(sliding window)"]
+        ErrH["errorHandler"]
+    end
+
+    %% ── Row 2: Controller ────────────────────────────────────────
+    Ctrl["ScoreController<br/>(Zod validation)"]
+
+    %% ── Row 3: Services ──────────────────────────────────────────
+    subgraph SVC["Services"]
+        direction LR
+        SS["ScoreService<br/>① verify action token<br/>② idempotency check<br/>③ DB write · ④ leaderboard update · ⑤ broadcast"]
+        AS["ActionService<br/>(token verify + delta lookup)"]
+        LS["LeaderboardService<br/>(Redis ZSET R/W + diff)"]
+    end
+
+    %% ── Row 4: Repository & Hub ──────────────────────────────────
+    subgraph RH["Data Layer"]
+        direction LR
+        Repo["ScoreRepository<br/>(Prisma)"]
+        Hub["WebSocket Hub<br/>(broadcast fan-out)"]
+    end
+
+    %% ── Row 5: Storage ───────────────────────────────────────────
+    subgraph ST["Persistent Storage"]
+        direction LR
+        MySQL[("MySQL 8<br/>users · score_events")]
+        ZSET["Redis ZSET<br/>leaderboard"]
+        STR1["Redis STR<br/>action:hash (idempotency NX)"]
+        STR2["Redis STR<br/>leaderboard:snapshot"]
+        PS[("Redis Pub/Sub<br/>leaderboard:updates")]
+    end
+
+    %% ── Edges ────────────────────────────────────────────────────
+    REST -->|"JWT · Idempotency-Key · action_token"| Auth
+    Auth --> Rate --> ErrH
+    Rate --> Ctrl
+    WSC --> Hub
+
+    Ctrl --> SS
+    SS --> AS & LS & Repo
+
+    AS  -->|"SET NX"| STR1
+    LS  -->|"ZINCRBY / ZREVRANGE"| ZSET
+    LS  -->|"compare"| STR2
+    LS  -->|"PUBLISH"| PS
+    Repo -->|"INSERT / UPDATE"| MySQL
+
+    PS  -->|"subscribe"| Hub
+    Hub -->|"leaderboard_snapshot / updated"| WSC
+
+    %% ── Styles ───────────────────────────────────────────────────
+    classDef client     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef middleware fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef controller fill:#f3e8ff,stroke:#a855f7,color:#3b0764
+    classDef service    fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef repo       fill:#e0f2fe,stroke:#0ea5e9,color:#0c4a6e
+    classDef hub        fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef storage    fill:#dcfce7,stroke:#22c55e,color:#14532d
+
+    class REST,WSC client
+    class Auth,Rate,ErrH middleware
+    class Ctrl controller
+    class SS,AS,LS service
+    class Repo repo
+    class Hub hub
+    class MySQL,ZSET,STR1,STR2,PS storage
+```
+
+---
+
+## Execution Flow (Sequence)
+
+### Score Update Flow
+
+When a user completes an action, the client submits a score update request. The API applies layered defences before touching the database: it first verifies the JWT identity, then checks the `Idempotency-Key` to guard against network retries, then atomically validates and consumes the single-use action token to prevent replays, and finally enforces a per-user rate limit. Only after all four gates pass does the service open a database transaction to increment the score and write the audit record. On commit, it updates the Redis leaderboard sorted set and publishes a broadcast event — keeping the HTTP response and the real-time fan-out decoupled.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant API as API Service
+    participant Redis
+    participant DB as MySQL
+
+    C->>API: POST /api/v1/scores/increment
+    Note over C,API: Headers: Bearer JWT, Idempotency-Key — Body: action_token
+
+    API->>API: Validate JWT signature & expiry (RS256)
+    Note over API: Reject 401 if invalid
+
+    API->>Redis: Check Idempotency-Key
+    Redis-->>API: Not seen
+    Note over API: Reject 409 if already processed
+
+    API->>Redis: Validate & consume action_token (atomic SET NX)
+    Redis-->>API: Token valid, now marked consumed
+    Note over API: Reject 403 if invalid / expired / already used
+
+    API->>Redis: Check rate limit (sliding window)
+    Redis-->>API: Within limit
+    Note over API: Reject 429 if exceeded
+
+    API->>DB: BEGIN TRANSACTION
+    API->>DB: UPDATE users SET score += delta WHERE id = user_id
+    API->>DB: INSERT score_events(user_id, action_token, delta, score_after, ip_address)
+    DB-->>API: COMMIT — new_score returned
+
+    API->>Redis: ZINCRBY leaderboard:top <delta> <user_id>
+    API->>Redis: PUBLISH leaderboard:updates
+    API->>Redis: Store Idempotency-Key with TTL
+
+    API-->>C: 200 OK { new_score, rank }
+```
+
+---
+
+### Live Leaderboard Broadcast Flow
+
+Connected clients never poll — they receive leaderboard updates passively via WebSocket. When a score update is committed, the Score Service publishes a message to a Redis Pub/Sub channel. The WebSocket Manager (running on every API instance) is subscribed to that channel; on receiving the event it fetches the current top-10 from the Redis Sorted Set and immediately broadcasts it to all connected clients. This design means the broadcast fan-out is completely decoupled from the HTTP request path and works correctly across multiple horizontally-scaled instances without sticky sessions.
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client (viewer)
+    participant WS as WebSocket Manager
+    participant Redis
+
+    C1->>WS: Connect to /ws/v1/leaderboard
+    WS->>Redis: ZREVRANGE leaderboard:top 0 9 WITHSCORES
+    Redis-->>WS: Current top-10
+    WS-->>C1: { event: "leaderboard_snapshot", leaderboard: [...] }
+
+    Note over WS,Redis: (Background) Score update occurs on another request
+
+    Redis->>WS: PUBLISH leaderboard:updates
+    WS->>Redis: ZREVRANGE leaderboard:top 0 9 WITHSCORES
+    Redis-->>WS: Updated top-10
+    WS-->>C1: { event: "leaderboard_updated", leaderboard: [...] }
+    Note over C1: UI re-renders scoreboard
+```
 
 ---
 
@@ -233,159 +438,6 @@ Key: `leaderboard`
 - Write: `ZINCRBY leaderboard <delta> <user_id>`
 - Read top-10: `ZREVRANGE leaderboard 0 9 WITHSCORES`
 - Snapshot comparison stored at: `leaderboard:snapshot` (JSON string, updated after each broadcast)
-
----
-
-## Architecture Diagram
-
-```mermaid
-flowchart TD
-    %% ── Row 0: Clients ───────────────────────────────────────────
-    REST(["REST (HTTPS)"])
-    WSC(["WebSocket (WSS)"])
-
-    %% ── Row 1: Middleware ────────────────────────────────────────
-    subgraph MW["Middleware"]
-        direction LR
-        Auth["authenticate<br/>(JWT RS256)"]
-        Rate["rateLimit<br/>(sliding window)"]
-        ErrH["errorHandler"]
-    end
-
-    %% ── Row 2: Controller ────────────────────────────────────────
-    Ctrl["ScoreController<br/>(Zod validation)"]
-
-    %% ── Row 3: Services ──────────────────────────────────────────
-    subgraph SVC["Services"]
-        direction LR
-        SS["ScoreService<br/>① verify action token<br/>② idempotency check<br/>③ DB write · ④ leaderboard update · ⑤ broadcast"]
-        AS["ActionService<br/>(token verify + delta lookup)"]
-        LS["LeaderboardService<br/>(Redis ZSET R/W + diff)"]
-    end
-
-    %% ── Row 4: Repository & Hub ──────────────────────────────────
-    subgraph RH["Data Layer"]
-        direction LR
-        Repo["ScoreRepository<br/>(Prisma)"]
-        Hub["WebSocket Hub<br/>(broadcast fan-out)"]
-    end
-
-    %% ── Row 5: Storage ───────────────────────────────────────────
-    subgraph ST["Persistent Storage"]
-        direction LR
-        MySQL[("MySQL 8<br/>users · score_events")]
-        ZSET["Redis ZSET<br/>leaderboard"]
-        STR1["Redis STR<br/>action:hash (idempotency NX)"]
-        STR2["Redis STR<br/>leaderboard:snapshot"]
-        PS[("Redis Pub/Sub<br/>leaderboard:updates")]
-    end
-
-    %% ── Edges ────────────────────────────────────────────────────
-    REST -->|"JWT · Idempotency-Key · action_token"| Auth
-    Auth --> Rate --> ErrH
-    Rate --> Ctrl
-    WSC --> Hub
-
-    Ctrl --> SS
-    SS --> AS & LS & Repo
-
-    AS  -->|"SET NX"| STR1
-    LS  -->|"ZINCRBY / ZREVRANGE"| ZSET
-    LS  -->|"compare"| STR2
-    LS  -->|"PUBLISH"| PS
-    Repo -->|"INSERT / UPDATE"| MySQL
-
-    PS  -->|"subscribe"| Hub
-    Hub -->|"leaderboard_snapshot / updated"| WSC
-
-    %% ── Styles ───────────────────────────────────────────────────
-    classDef client     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef middleware fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef controller fill:#f3e8ff,stroke:#a855f7,color:#3b0764
-    classDef service    fill:#ede9fe,stroke:#7c3aed,color:#2e1065
-    classDef repo       fill:#e0f2fe,stroke:#0ea5e9,color:#0c4a6e
-    classDef hub        fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef storage    fill:#dcfce7,stroke:#22c55e,color:#14532d
-
-    class REST,WSC client
-    class Auth,Rate,ErrH middleware
-    class Ctrl controller
-    class SS,AS,LS service
-    class Repo repo
-    class Hub hub
-    class MySQL,ZSET,STR1,STR2,PS storage
-```
-
----
-
-## Execution Flow (Sequence)
-
-### Score Update Flow
-
-When a user completes an action, the client submits a score update request. The API applies layered defences before touching the database: it first verifies the JWT identity, then checks the `Idempotency-Key` to guard against network retries, then atomically validates and consumes the single-use action token to prevent replays, and finally enforces a per-user rate limit. Only after all four gates pass does the service open a database transaction to increment the score and write the audit record. On commit, it updates the Redis leaderboard sorted set and publishes a broadcast event — keeping the HTTP response and the real-time fan-out decoupled.
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant API as API Service
-    participant Redis
-    participant DB as MySQL
-
-    C->>API: POST /api/v1/scores/increment
-    Note over C,API: Headers: Bearer JWT, Idempotency-Key — Body: action_token
-
-    API->>API: Validate JWT signature & expiry (RS256)
-    Note over API: Reject 401 if invalid
-
-    API->>Redis: Check Idempotency-Key
-    Redis-->>API: Not seen
-    Note over API: Reject 409 if already processed
-
-    API->>Redis: Validate & consume action_token (atomic SET NX)
-    Redis-->>API: Token valid, now marked consumed
-    Note over API: Reject 403 if invalid / expired / already used
-
-    API->>Redis: Check rate limit (sliding window)
-    Redis-->>API: Within limit
-    Note over API: Reject 429 if exceeded
-
-    API->>DB: BEGIN TRANSACTION
-    API->>DB: UPDATE users SET score += delta WHERE id = user_id
-    API->>DB: INSERT score_events(user_id, action_token, delta, score_after, ip_address)
-    DB-->>API: COMMIT — new_score returned
-
-    API->>Redis: ZINCRBY leaderboard:top <delta> <user_id>
-    API->>Redis: PUBLISH leaderboard:updates
-    API->>Redis: Store Idempotency-Key with TTL
-
-    API-->>C: 200 OK { new_score, rank }
-```
-
----
-
-### Live Leaderboard Broadcast Flow
-
-Connected clients never poll — they receive leaderboard updates passively via WebSocket. When a score update is committed, the Score Service publishes a message to a Redis Pub/Sub channel. The WebSocket Manager (running on every API instance) is subscribed to that channel; on receiving the event it fetches the current top-10 from the Redis Sorted Set and immediately broadcasts it to all connected clients. This design means the broadcast fan-out is completely decoupled from the HTTP request path and works correctly across multiple horizontally-scaled instances without sticky sessions.
-
-```mermaid
-sequenceDiagram
-    participant C1 as Client (viewer)
-    participant WS as WebSocket Manager
-    participant Redis
-
-    C1->>WS: Connect to /ws/v1/leaderboard
-    WS->>Redis: ZREVRANGE leaderboard:top 0 9 WITHSCORES
-    Redis-->>WS: Current top-10
-    WS-->>C1: { event: "leaderboard_snapshot", leaderboard: [...] }
-
-    Note over WS,Redis: (Background) Score update occurs on another request
-
-    Redis->>WS: PUBLISH leaderboard:updates
-    WS->>Redis: ZREVRANGE leaderboard:top 0 9 WITHSCORES
-    Redis-->>WS: Updated top-10
-    WS-->>C1: { event: "leaderboard_updated", leaderboard: [...] }
-    Note over C1: UI re-renders scoreboard
-```
 
 ---
 
