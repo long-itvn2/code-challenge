@@ -18,4 +18,8 @@ export const categoryRepository = {
       include: includeResourceCount,
     });
   },
+
+  delete(id: string) {
+    return prisma.category.delete({ where: { id } });
+  },
 };

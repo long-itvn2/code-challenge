@@ -1,6 +1,8 @@
 # ---- Build Stage ----
 FROM node:18-alpine AS builder
 
+RUN apk add --no-cache openssl
+
 WORKDIR /app
 
 COPY package*.json ./
@@ -16,6 +18,8 @@ RUN npm run build
 # ---- Production Stage ----
 FROM node:18-alpine AS production
 
+RUN apk add --no-cache openssl
+
 WORKDIR /app
 
 COPY package*.json ./
@@ -28,4 +32,4 @@ COPY --from=builder /app/dist ./dist
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "npx prisma db push && node dist/server.js"]
