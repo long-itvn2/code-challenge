@@ -239,40 +239,40 @@ Key: `leaderboard`
 ## Architecture Diagram
 
 ```mermaid
-flowchart LR
-    %% ── Clients ──────────────────────────────────────────────────
-    subgraph CL["Clients"]
-        direction TB
-        REST["REST (HTTPS)<br/>POST /scores/increment<br/>GET /scores/leaderboard"]
-        WSC["WebSocket (WSS)<br/>/ws/v1/leaderboard"]
-    end
+flowchart TD
+    %% ── Row 0: Clients ───────────────────────────────────────────
+    REST(["REST (HTTPS)"])
+    WSC(["WebSocket (WSS)"])
 
-    %% ── Middleware ───────────────────────────────────────────────
+    %% ── Row 1: Middleware ────────────────────────────────────────
     subgraph MW["Middleware"]
-        direction TB
+        direction LR
         Auth["authenticate<br/>(JWT RS256)"]
         Rate["rateLimit<br/>(sliding window)"]
         ErrH["errorHandler"]
     end
 
-    %% ── Controller ───────────────────────────────────────────────
+    %% ── Row 2: Controller ────────────────────────────────────────
     Ctrl["ScoreController<br/>(Zod validation)"]
 
-    %% ── Services ─────────────────────────────────────────────────
+    %% ── Row 3: Services ──────────────────────────────────────────
     subgraph SVC["Services"]
-        direction TB
-        SS["ScoreService<br/>① verify action token<br/>② idempotency check<br/>③ DB write<br/>④ leaderboard update<br/>⑤ broadcast"]
+        direction LR
+        SS["ScoreService<br/>① verify action token<br/>② idempotency check<br/>③ DB write · ④ leaderboard update · ⑤ broadcast"]
         AS["ActionService<br/>(token verify + delta lookup)"]
         LS["LeaderboardService<br/>(Redis ZSET R/W + diff)"]
     end
 
-    %% ── Repository & Hub ─────────────────────────────────────────
-    Repo["ScoreRepository<br/>(Prisma)"]
-    Hub["WebSocket Hub<br/>(broadcast fan-out)"]
+    %% ── Row 4: Repository & Hub ──────────────────────────────────
+    subgraph RH["Data Layer"]
+        direction LR
+        Repo["ScoreRepository<br/>(Prisma)"]
+        Hub["WebSocket Hub<br/>(broadcast fan-out)"]
+    end
 
-    %% ── Storage ──────────────────────────────────────────────────
+    %% ── Row 5: Storage ───────────────────────────────────────────
     subgraph ST["Persistent Storage"]
-        direction TB
+        direction LR
         MySQL[("MySQL 8<br/>users · score_events")]
         ZSET["Redis ZSET<br/>leaderboard"]
         STR1["Redis STR<br/>action:hash (idempotency NX)"]
