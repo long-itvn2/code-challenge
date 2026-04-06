@@ -22,14 +22,33 @@ export const resourceRepository = {
   },
 
   async findAll(filter?: ResourceFilter) {
-    return prisma.resource.findMany({
-      where: {
-        ...(filter?.name ? { name: { contains: filter.name } } : {}),
-        ...(filter?.categoryId ? { categoryId: filter.categoryId } : {}),
+    const page = filter?.page ?? 1;
+    const limit = filter?.limit ?? 10;
+    const where = {
+      ...(filter?.name ? { name: { contains: filter.name } } : {}),
+      ...(filter?.categoryId ? { categoryId: filter.categoryId } : {}),
+    };
+
+    const [data, total] = await Promise.all([
+      prisma.resource.findMany({
+        where,
+        include: includeRelations,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.resource.count({ where }),
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
       },
-      include: includeRelations,
-      orderBy: { createdAt: "desc" },
-    });
+    };
   },
 
   async findById(id: string) {

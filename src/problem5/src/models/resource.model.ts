@@ -17,6 +17,8 @@ export const UpdateResourceSchema = z.object({
 export const ResourceFilterSchema = z.object({
   name: z.string().optional(),
   categoryId: z.string().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(10),
 });
 
 export type CreateResourceDto = z.infer<typeof CreateResourceSchema>;

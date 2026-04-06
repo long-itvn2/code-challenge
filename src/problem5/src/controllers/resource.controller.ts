@@ -20,8 +20,8 @@ export const resourceController = {
   async findAll(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const filter = ResourceFilterSchema.parse(req.query);
-      const resources = await resourceService.findAll(filter);
-      res.status(200).json(resources);
+      const result = await resourceService.findAll(filter);
+      res.status(200).json(result);
     } catch (error) {
       next(error);
     }

@@ -260,15 +260,31 @@ Base URL: `http://localhost:3000`
 }
 ```
 
-### `GET /resources` — List with filters
+### `GET /resources` — List with filters and pagination
 
-| Query param  | Type   | Description                         |
-|--------------|--------|-------------------------------------|
-| `name`       | string | Partial match on resource name      |
-| `categoryId` | UUID   | Filter by exact category            |
+| Query param  | Type    | Default | Description                          |
+|--------------|---------|---------|--------------------------------------|
+| `name`       | string  | —       | Partial match on resource name       |
+| `categoryId` | UUID    | —       | Filter by exact category             |
+| `page`       | integer | `1`     | Page number (min 1)                  |
+| `limit`      | integer | `10`    | Items per page (min 1, max 100)      |
 
 ```bash
-GET /resources?name=widget&categoryId=<uuid>
+GET /resources?name=widget&categoryId=<uuid>&page=1&limit=10
+```
+
+**Response** `200`:
+
+```json
+{
+  "data": [ ... ],
+  "meta": {
+    "total": 5,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
 ```
 
 ### `PUT /resources/:id` — Update (partial)
@@ -486,145 +502,123 @@ curl -X POST http://localhost:3000/resources \
 
 ---
 
-### List all resources
+### List all resources (default pagination)
 
 ```bash
 curl http://localhost:3000/resources
 ```
 
 ```json
-[
-    {
-        "id": "00000000-0000-0000-0000-000000000005",
-        "name": "Docker Dev Toolkit",
-        "description": "Docker Compose templates for common development stacks.",
-        "categoryId": "9ebdc145-6145-4cfa-ae30-3711f950fb22",
-        "createdAt": "2026-04-06T07:12:44.890Z",
-        "updatedAt": "2026-04-06T07:12:44.890Z",
-        "category": {
-            "id": "9ebdc145-6145-4cfa-ae30-3711f950fb22",
-            "name": "Tools",
-            "createdAt": "2026-04-06T07:12:44.869Z",
-            "updatedAt": "2026-04-06T07:12:44.869Z"
-        },
-        "tags": [
-            {
-                "id": "8be88f5c-74a5-437e-8ec0-469c82686232",
-                "name": "open-source",
-                "createdAt": "2026-04-06T07:12:44.881Z"
+{
+    "data": [
+        {
+            "id": "00000000-0000-0000-0000-000000000005",
+            "name": "Docker Dev Toolkit",
+            "description": "Docker Compose templates for common development stacks.",
+            "categoryId": "9ebdc145-6145-4cfa-ae30-3711f950fb22",
+            "createdAt": "2026-04-06T07:12:44.890Z",
+            "updatedAt": "2026-04-06T07:12:44.890Z",
+            "category": {
+                "id": "9ebdc145-6145-4cfa-ae30-3711f950fb22",
+                "name": "Tools",
+                "createdAt": "2026-04-06T07:12:44.869Z",
+                "updatedAt": "2026-04-06T07:12:44.869Z"
             },
-            {
-                "id": "eb5540cb-ff52-4df6-a8b2-e14f5b62964c",
-                "name": "featured",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            }
-        ]
-    },
-    {
-        "id": "00000000-0000-0000-0000-000000000001",
-        "name": "Figma Design System",
-        "description": "A comprehensive design system built in Figma for rapid prototyping.",
-        "categoryId": "b44cfaac-f08e-497a-b3ee-568f1a1363c3",
-        "createdAt": "2026-04-06T07:12:44.889Z",
-        "updatedAt": "2026-04-06T07:12:44.889Z",
-        "category": {
-            "id": "b44cfaac-f08e-497a-b3ee-568f1a1363c3",
-            "name": "Design",
-            "createdAt": "2026-04-06T07:12:44.869Z",
-            "updatedAt": "2026-04-06T07:12:44.869Z"
+            "tags": [
+                {
+                    "id": "8be88f5c-74a5-437e-8ec0-469c82686232",
+                    "name": "open-source",
+                    "createdAt": "2026-04-06T07:12:44.881Z"
+                },
+                {
+                    "id": "eb5540cb-ff52-4df6-a8b2-e14f5b62964c",
+                    "name": "featured",
+                    "createdAt": "2026-04-06T07:12:44.881Z"
+                }
+            ]
         },
-        "tags": [
-            {
-                "id": "9be6d436-d112-4456-8ab3-541efc357aa6",
-                "name": "popular",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            },
-            {
-                "id": "eb5540cb-ff52-4df6-a8b2-e14f5b62964c",
-                "name": "featured",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            }
-        ]
-    },
-    {
-        "id": "00000000-0000-0000-0000-000000000002",
-        "name": "VS Code Extension Pack",
-        "description": "A curated set of VS Code extensions for TypeScript development.",
-        "categoryId": "9ebdc145-6145-4cfa-ae30-3711f950fb22",
-        "createdAt": "2026-04-06T07:12:44.889Z",
-        "updatedAt": "2026-04-06T07:12:44.889Z",
-        "category": {
-            "id": "9ebdc145-6145-4cfa-ae30-3711f950fb22",
-            "name": "Tools",
-            "createdAt": "2026-04-06T07:12:44.869Z",
-            "updatedAt": "2026-04-06T07:12:44.869Z"
-        },
-        "tags": [
-            {
-                "id": "8be88f5c-74a5-437e-8ec0-469c82686232",
-                "name": "open-source",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            },
-            {
-                "id": "9be6d436-d112-4456-8ab3-541efc357aa6",
-                "name": "popular",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            }
-        ]
-    },
-    {
-        "id": "00000000-0000-0000-0000-000000000003",
-        "name": "Express Boilerplate",
-        "description": "A production-ready Express + TypeScript starter with Prisma and Zod.",
-        "categoryId": "abf67a54-4ceb-43ed-97c9-0085f76f7ea1",
-        "createdAt": "2026-04-06T07:12:44.889Z",
-        "updatedAt": "2026-04-06T07:12:44.889Z",
-        "category": {
-            "id": "abf67a54-4ceb-43ed-97c9-0085f76f7ea1",
-            "name": "Development",
-            "createdAt": "2026-04-06T07:12:44.869Z",
-            "updatedAt": "2026-04-06T07:12:44.869Z"
-        },
-        "tags": [
-            {
-                "id": "751cf114-34f7-4c04-861f-0baa42f631e5",
-                "name": "new",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            },
-            {
-                "id": "8be88f5c-74a5-437e-8ec0-469c82686232",
-                "name": "open-source",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            },
-            {
-                "id": "eb5540cb-ff52-4df6-a8b2-e14f5b62964c",
-                "name": "featured",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            }
-        ]
-    },
-    {
-        "id": "00000000-0000-0000-0000-000000000004",
-        "name": "Tailwind UI Kit",
-        "description": "Pre-built Tailwind CSS components ready for production use.",
-        "categoryId": "b44cfaac-f08e-497a-b3ee-568f1a1363c3",
-        "createdAt": "2026-04-06T07:12:44.889Z",
-        "updatedAt": "2026-04-06T07:12:44.889Z",
-        "category": {
-            "id": "b44cfaac-f08e-497a-b3ee-568f1a1363c3",
-            "name": "Design",
-            "createdAt": "2026-04-06T07:12:44.869Z",
-            "updatedAt": "2026-04-06T07:12:44.869Z"
-        },
-        "tags": [
-            {
-                "id": "751cf114-34f7-4c04-861f-0baa42f631e5",
-                "name": "new",
-                "createdAt": "2026-04-06T07:12:44.881Z"
-            }
-        ]
+        { "...": "3 more items" }
+    ],
+    "meta": {
+        "total": 5,
+        "page": 1,
+        "limit": 10,
+        "totalPages": 1
     }
-]
+}
+```
+
+---
+
+### List resources with pagination
+
+```bash
+curl "http://localhost:3000/resources?page=1&limit=2"
+```
+
+```json
+{
+    "data": [
+        {
+            "id": "00000000-0000-0000-0000-000000000005",
+            "name": "Docker Dev Toolkit",
+            "description": "Docker Compose templates for common development stacks.",
+            "categoryId": "9ebdc145-6145-4cfa-ae30-3711f950fb22",
+            "createdAt": "2026-04-06T07:12:44.890Z",
+            "updatedAt": "2026-04-06T07:12:44.890Z",
+            "category": {
+                "id": "9ebdc145-6145-4cfa-ae30-3711f950fb22",
+                "name": "Tools",
+                "createdAt": "2026-04-06T07:12:44.869Z",
+                "updatedAt": "2026-04-06T07:12:44.869Z"
+            },
+            "tags": [
+                {
+                    "id": "8be88f5c-74a5-437e-8ec0-469c82686232",
+                    "name": "open-source",
+                    "createdAt": "2026-04-06T07:12:44.881Z"
+                },
+                {
+                    "id": "eb5540cb-ff52-4df6-a8b2-e14f5b62964c",
+                    "name": "featured",
+                    "createdAt": "2026-04-06T07:12:44.881Z"
+                }
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "Figma Design System",
+            "description": "A comprehensive design system built in Figma for rapid prototyping.",
+            "categoryId": "b44cfaac-f08e-497a-b3ee-568f1a1363c3",
+            "createdAt": "2026-04-06T07:12:44.889Z",
+            "updatedAt": "2026-04-06T07:12:44.889Z",
+            "category": {
+                "id": "b44cfaac-f08e-497a-b3ee-568f1a1363c3",
+                "name": "Design",
+                "createdAt": "2026-04-06T07:12:44.869Z",
+                "updatedAt": "2026-04-06T07:12:44.869Z"
+            },
+            "tags": [
+                {
+                    "id": "9be6d436-d112-4456-8ab3-541efc357aa6",
+                    "name": "popular",
+                    "createdAt": "2026-04-06T07:12:44.881Z"
+                },
+                {
+                    "id": "eb5540cb-ff52-4df6-a8b2-e14f5b62964c",
+                    "name": "featured",
+                    "createdAt": "2026-04-06T07:12:44.881Z"
+                }
+            ]
+        }
+    ],
+    "meta": {
+        "total": 5,
+        "page": 1,
+        "limit": 2,
+        "totalPages": 3
+    }
+}
 ```
 
 ---
@@ -855,6 +849,47 @@ Tests are located in `src/__tests__/` and cover:
 | `errorHandler.test.ts` | Zod errors → 400, `NotFoundError` → 404, `AppError` → custom status, unknown → 500 |
 | `resource.model.test.ts` | Zod schema: required fields, UUID validation, partial updates |
 | `resource.service.test.ts` | Service logic with mocked repository: found/not-found cases |
+
+### Test results
+
+```
+PASS src/__tests__/resource.service.test.ts
+  resourceService
+    findById
+      ✓ returns resource when found (1 ms)
+      ✓ throws NotFoundError when resource does not exist (2 ms)
+    delete
+      ✓ calls repository delete when resource exists
+      ✓ throws NotFoundError when resource does not exist
+
+PASS src/__tests__/resource.model.test.ts
+  CreateResourceSchema
+    ✓ accepts valid input (1 ms)
+    ✓ accepts input without optional fields
+    ✓ fails when name is missing (1 ms)
+    ✓ fails when categoryId is missing
+    ✓ fails when categoryId is not a valid UUID
+    ✓ fails when name exceeds 255 characters (1 ms)
+    ✓ fails when tagIds contains an invalid UUID
+  UpdateResourceSchema
+    ✓ allows an empty object (all fields optional)
+    ✓ accepts partial update with name only
+    ✓ accepts partial update with categoryId
+    ✓ fails when categoryId is provided but not a valid UUID
+    ✓ accepts tagIds array of valid UUIDs
+
+PASS src/__tests__/errorHandler.test.ts
+  errorHandler middleware
+    ✓ handles ZodError with 400 and error details (1 ms)
+    ✓ handles NotFoundError with 404
+    ✓ handles AppError(409) with 409
+    ✓ handles unknown Error with 500
+
+Test Suites: 3 passed, 3 total
+Tests:       20 passed, 20 total
+Snapshots:   0 total
+Time:        0.884 s
+```
 
 ---
 
