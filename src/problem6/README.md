@@ -239,62 +239,81 @@ Key: `leaderboard`
 ## Architecture Diagram
 
 ```mermaid
-flowchart TD
-    subgraph Clients["Clients (Browser / Mobile App)"]
-        REST["REST (HTTPS)\nPOST /api/v1/scores/increment\nGET /api/v1/scores/leaderboard"]
-        WSC["WebSocket (WSS)\n/ws/v1/leaderboard\nlive push events"]
-    end
-
-    subgraph API["API Service (Node.js / Express)"]
+flowchart LR
+    %% ── Clients ──────────────────────────────────────────────────
+    subgraph CL["Clients"]
         direction TB
-        subgraph Middleware["Middleware"]
-            Auth["authenticate\n(JWT RS256)"]
-            Rate["rateLimit\n(sliding window)"]
-            Err["errorHandler"]
-        end
-
-        Ctrl["ScoreController\n(Zod validation)"]
-
-        subgraph Services["Services"]
-            SS["ScoreService\n1. verify action token\n2. idempotency check\n3. DB write\n4. leaderboard update\n5. broadcast"]
-            AS["ActionService\n(token verify + delta lookup)"]
-            LS["LeaderboardService\n(Redis ZSET R/W + diff)"]
-        end
-
-        Repo["ScoreRepository\n(Prisma)"]
-        WSHub["WebSocket Hub\n(broadcast fan-out)"]
+        REST["REST (HTTPS)<br/>POST /scores/increment<br/>GET /scores/leaderboard"]
+        WSC["WebSocket (WSS)<br/>/ws/v1/leaderboard"]
     end
 
-    subgraph Storage["Persistent Storage"]
-        MySQL[("MySQL 8\nusers\nscore_events\n(audit log)")]
-        subgraph RedisStore["Redis 7"]
-            ZSET["ZSET: leaderboard\n(top-10 sorted set)"]
-            STR1["STR: action:&lt;hash&gt;\n(idempotency NX keys)"]
-            STR2["STR: leaderboard:snapshot\n(change detection)"]
-            PUBSUB["Pub/Sub: leaderboard:updates"]
-        end
+    %% ── Middleware ───────────────────────────────────────────────
+    subgraph MW["Middleware"]
+        direction TB
+        Auth["authenticate<br/>(JWT RS256)"]
+        Rate["rateLimit<br/>(sliding window)"]
+        ErrH["errorHandler"]
     end
 
-    REST -->|"Bearer JWT\nIdempotency-Key\naction_token"| Auth
-    WSC --> WSHub
+    %% ── Controller ───────────────────────────────────────────────
+    Ctrl["ScoreController<br/>(Zod validation)"]
 
-    Auth --> Rate
-    Rate --> Err
-    Auth & Rate --> Ctrl
+    %% ── Services ─────────────────────────────────────────────────
+    subgraph SVC["Services"]
+        direction TB
+        SS["ScoreService<br/>① verify action token<br/>② idempotency check<br/>③ DB write<br/>④ leaderboard update<br/>⑤ broadcast"]
+        AS["ActionService<br/>(token verify + delta lookup)"]
+        LS["LeaderboardService<br/>(Redis ZSET R/W + diff)"]
+    end
+
+    %% ── Repository & Hub ─────────────────────────────────────────
+    Repo["ScoreRepository<br/>(Prisma)"]
+    Hub["WebSocket Hub<br/>(broadcast fan-out)"]
+
+    %% ── Storage ──────────────────────────────────────────────────
+    subgraph ST["Persistent Storage"]
+        direction TB
+        MySQL[("MySQL 8<br/>users · score_events")]
+        ZSET["Redis ZSET<br/>leaderboard"]
+        STR1["Redis STR<br/>action:hash (idempotency NX)"]
+        STR2["Redis STR<br/>leaderboard:snapshot"]
+        PS[("Redis Pub/Sub<br/>leaderboard:updates")]
+    end
+
+    %% ── Edges ────────────────────────────────────────────────────
+    REST -->|"JWT · Idempotency-Key · action_token"| Auth
+    Auth --> Rate --> ErrH
+    Rate --> Ctrl
+    WSC --> Hub
 
     Ctrl --> SS
-    SS --> AS
-    SS --> LS
-    SS --> Repo
+    SS --> AS & LS & Repo
 
-    AS -->|"verify & consume\nSET NX"| STR1
-    LS -->|"ZINCRBY / ZREVRANGE"| ZSET
-    LS -->|"snapshot compare"| STR2
-    LS -->|"PUBLISH"| PUBSUB
-    Repo -->|"INSERT score_events\nUPDATE users.score"| MySQL
+    AS  -->|"SET NX"| STR1
+    LS  -->|"ZINCRBY / ZREVRANGE"| ZSET
+    LS  -->|"compare"| STR2
+    LS  -->|"PUBLISH"| PS
+    Repo -->|"INSERT / UPDATE"| MySQL
 
-    PUBSUB -->|"subscriber"| WSHub
-    WSHub -->|"leaderboard_snapshot\nleaderboard_updated"| WSC
+    PS  -->|"subscribe"| Hub
+    Hub -->|"leaderboard_snapshot / updated"| WSC
+
+    %% ── Styles ───────────────────────────────────────────────────
+    classDef client     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef middleware fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef controller fill:#f3e8ff,stroke:#a855f7,color:#3b0764
+    classDef service    fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef repo       fill:#e0f2fe,stroke:#0ea5e9,color:#0c4a6e
+    classDef hub        fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef storage    fill:#dcfce7,stroke:#22c55e,color:#14532d
+
+    class REST,WSC client
+    class Auth,Rate,ErrH middleware
+    class Ctrl controller
+    class SS,AS,LS service
+    class Repo repo
+    class Hub hub
+    class MySQL,ZSET,STR1,STR2,PS storage
 ```
 
 ---
